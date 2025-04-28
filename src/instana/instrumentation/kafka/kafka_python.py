@@ -37,14 +37,16 @@ try:
             span.set_attribute("kafka.access", "send")
 
             # context propagation
+            headers = kwargs.get("headers", [])
             tracer.inject(
                 span.context,
                 Format.KAFKA_HEADERS,
-                kwargs.get("headers", {}),
+                headers,
                 disable_w3c_trace_context=True,
             )
 
             try:
+                kwargs["headers"] = headers
                 res = wrapped(*args, **kwargs)
             except Exception as exc:
                 span.record_exception(exc)
@@ -62,28 +64,30 @@ try:
             return wrapped(*args, **kwargs)
 
         tracer, parent_span, _ = get_tracer_tuple()
-
-        parent_context = (
-            parent_span.get_span_context()
-            if parent_span
-            else tracer.extract(
-                Format.KAFKA_HEADERS, {}, disable_w3c_trace_context=True
+        exception = ""
+        try:
+            res = wrapped(*args, **kwargs)
+        except Exception as exc:
+            exception = exc
+        else:
+            parent_context = (
+                parent_span.get_span_context()
+                if parent_span
+                else tracer.extract(
+                    Format.KAFKA_HEADERS,
+                    res.headers,
+                    disable_w3c_trace_context=True,
+                )
             )
-        )
+            with tracer.start_as_current_span(
+                "kafka-consumer", span_context=parent_context, kind=SpanKind.CONSUMER
+            ) as span:
+                span.set_attribute("kafka.service", res.topic)
+                span.set_attribute("kafka.access", "consume")
 
-        with tracer.start_as_current_span(
-            "kafka-consumer", span_context=parent_context, kind=SpanKind.CONSUMER
-        ) as span:
-            topic = list(instance.subscription())[0]
-            span.set_attribute("kafka.service", topic)
-            span.set_attribute("kafka.access", "consume")
-
-            try:
-                res = wrapped(*args, **kwargs)
-            except Exception as exc:
-                span.record_exception(exc)
-            else:
-                return res
+                if exception:
+                    span.record_exception(exception)
+        return res
 
     @wrapt.patch_function_wrapper("kafka", "KafkaConsumer.poll")
     def trace_kafka_poll(

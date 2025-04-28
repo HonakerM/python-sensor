@@ -360,6 +360,12 @@ class HostAgent(BaseAgent):
                 )
                 if service == "kafka":
                     endpoint = span.data[service][service_specifier_key]
+                # comment these out only if you like to ignore internal events
+                # if (
+                #     service == "urllib3"
+                #     and "com.instana" in span.data["http"]["url"]
+                # ):
+                #     continue
                 method = span.data[service][operation_specifier_key]
                 if isinstance(method, str) and self.__is_endpoint_ignored(
                     service, method, endpoint
